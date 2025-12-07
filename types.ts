@@ -55,6 +55,12 @@ export interface Produto {
   imagem?: string;
 }
 
+export interface FormaPagamento {
+  id: number;
+  nome: string; // Dinheiro, Cartão Crédito, PIX
+  ativo: boolean;
+}
+
 export interface PedidoItem {
   produto: Produto;
   quantidade: number;
@@ -69,6 +75,11 @@ export interface Pedido {
   total: number;
   status: PedidoStatus;
   itens: PedidoItem[];
+  // Payment Details
+  formaPagamentoId?: number;
+  formaPagamentoNome?: string;
+  valorRecebido?: number; // Para cálculo de troco em dinheiro
+  troco?: number;
 }
 
 export interface CaixaMovimento {

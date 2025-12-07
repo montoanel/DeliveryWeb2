@@ -1,4 +1,4 @@
-import { Cliente, Produto, CaixaMovimento, Pedido, TipoOperacaoCaixa, PedidoStatus, GrupoProduto } from '../types';
+import { Cliente, Produto, CaixaMovimento, Pedido, TipoOperacaoCaixa, PedidoStatus, GrupoProduto, FormaPagamento } from '../types';
 
 export const INITIAL_GROUPS: GrupoProduto[] = [
   { id: 1, nome: 'Lanches' },
@@ -6,6 +6,14 @@ export const INITIAL_GROUPS: GrupoProduto[] = [
   { id: 3, nome: 'Bebidas' },
   { id: 4, nome: 'Porções' },
   { id: 5, nome: 'Sobremesas' },
+];
+
+export const INITIAL_PAYMENT_METHODS: FormaPagamento[] = [
+  { id: 1, nome: 'Dinheiro', ativo: true },
+  { id: 2, nome: 'Cartão de Crédito', ativo: true },
+  { id: 3, nome: 'Cartão de Débito', ativo: true },
+  { id: 4, nome: 'PIX', ativo: true },
+  { id: 5, nome: 'Voucher / Refeição', ativo: true },
 ];
 
 // Seed Data
@@ -50,6 +58,7 @@ class MockDbContext {
   private produtos: Produto[] = [...INITIAL_PRODUCTS];
   private grupos: GrupoProduto[] = [...INITIAL_GROUPS];
   private clientes: Cliente[] = [...INITIAL_CLIENTS];
+  private formasPagamento: FormaPagamento[] = [...INITIAL_PAYMENT_METHODS];
 
   constructor() {
     // Seed initial cash opening
@@ -89,7 +98,7 @@ class MockDbContext {
         data: new Date().toISOString(),
         tipoOperacao: TipoOperacaoCaixa.Vendas,
         valor: pedido.total,
-        observacao: `Venda Pedido #${pedido.id} - ${pedido.tipoAtendimento}`
+        observacao: `Venda #${pedido.id} (${pedido.tipoAtendimento}) - ${pedido.formaPagamentoNome}`
       });
     }
   }
@@ -147,6 +156,24 @@ class MockDbContext {
 
   deleteCliente(id: number) {
     this.clientes = this.clientes.filter(c => c.id !== id);
+  }
+
+  // --- Formas de Pagamento ---
+  getFormasPagamento() {
+    return [...this.formasPagamento];
+  }
+
+  saveFormaPagamento(forma: FormaPagamento) {
+    if (forma.id === 0) {
+      const newId = Math.max(...this.formasPagamento.map(f => f.id), 0) + 1;
+      this.formasPagamento.push({ ...forma, id: newId });
+    } else {
+      this.formasPagamento = this.formasPagamento.map(f => f.id === forma.id ? forma : f);
+    }
+  }
+
+  deleteFormaPagamento(id: number) {
+    this.formasPagamento = this.formasPagamento.filter(f => f.id !== id);
   }
 }
 
