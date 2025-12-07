@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Produto, PedidoItem, Cliente, TipoAtendimento, PedidoStatus, Pedido, FormaPagamento } from '../types';
+import { Produto, PedidoItem, Cliente, TipoAtendimento, PedidoStatus, Pedido, FormaPagamento, ConfiguracaoAdicional, PedidoItemAdicional } from '../types';
 import { db } from '../services/mockDb';
 import { 
   Search, Plus, Trash2, User, Truck, ShoppingBag, 
-  ClipboardList, Zap, Save, X, Calculator, Calendar, CreditCard, Banknote, MapPin, Package
+  ClipboardList, Zap, Save, X, Calculator, Calendar, CreditCard, Banknote, MapPin, Package, CheckSquare, Square
 } from 'lucide-react';
 
 // Helper for accent-insensitive search
@@ -19,6 +19,7 @@ const POS: React.FC = () => {
   const [availableProducts, setAvailableProducts] = useState<Produto[]>([]);
   const [availableClients, setAvailableClients] = useState<Cliente[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<FormaPagamento[]>([]);
+  const [addonConfigs, setAddonConfigs] = useState<ConfiguracaoAdicional[]>([]);
 
   // --- Form State ---
   const [currentOrderType, setCurrentOrderType] = useState<TipoAtendimento>(TipoAtendimento.VendaRapida);
@@ -33,8 +34,13 @@ const POS: React.FC = () => {
   // --- Modals State ---
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [isClientModalOpen, setIsClientModalOpen] = useState(false); 
-  const [isProductModalOpen, setIsProductModalOpen] = useState(false); // New Product Search Modal
+  const [isProductModalOpen, setIsProductModalOpen] = useState(false); 
   
+  // Addon Modal State
+  const [isAddonModalOpen, setIsAddonModalOpen] = useState(false);
+  const [pendingAddonProduct, setPendingAddonProduct] = useState<{product: Produto, config: ConfiguracaoAdicional} | null>(null);
+  const [selectedAddons, setSelectedAddons] = useState<number[]>([]);
+
   const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState<number | null>(null);
   const [receivedAmount, setReceivedAmount] = useState<string>(''); 
 
@@ -44,6 +50,7 @@ const POS: React.FC = () => {
     setAvailableProducts(db.getProdutos());
     setAvailableClients(db.getClientes());
     setPaymentMethods(db.getFormasPagamento().filter(f => f.ativo));
+    setAddonConfigs(db.getConfiguracoesAdicionais());
   };
 
   useEffect(() => {
@@ -66,12 +73,17 @@ const POS: React.FC = () => {
           e.preventDefault();
           handleInitiatePayment();
         }
+        if (e.key === 'Escape' && !isPaymentModalOpen && !isClientModalOpen && !isProductModalOpen && !isAddonModalOpen) {
+          if(confirm("Deseja realmente cancelar este atendimento?")) {
+            setView('list');
+          }
+        }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [view, cart, currentOrderType, selectedClient]); // Dependencies for payment validation inside handler
+  }, [view, cart, currentOrderType, selectedClient, isPaymentModalOpen, isClientModalOpen, isProductModalOpen, isAddonModalOpen]); 
 
   // --- Handlers ---
 
@@ -87,35 +99,86 @@ const POS: React.FC = () => {
     setIsPaymentModalOpen(false);
     setIsClientModalOpen(false);
     setIsProductModalOpen(false);
+    setIsAddonModalOpen(false);
+    setPendingAddonProduct(null);
+    setSelectedAddons([]);
+
     setSelectedPaymentMethodId(null);
     setReceivedAmount('');
     
     setView('form');
   };
 
-  const handleAddItem = (product: Produto) => {
+  const addItemToCart = (product: Produto, quantity: number, addons?: PedidoItemAdicional[]) => {
     setCart(prev => {
-      const existing = prev.find(item => item.produto.id === product.id);
+      // If it has addons, we always add as a new item line, because addons might differ
+      if (addons && addons.length > 0) {
+        return [...prev, { produto: product, quantidade: quantity, adicionais: addons }];
+      }
+
+      // If simple product, we can stack quantities
+      const existing = prev.find(item => item.produto.id === product.id && (!item.adicionais || item.adicionais.length === 0));
       if (existing) {
         return prev.map(item => 
-          item.produto.id === product.id 
+          (item.produto.id === product.id && (!item.adicionais || item.adicionais.length === 0))
             ? { ...item, quantidade: item.quantidade + 1 } 
             : item
         );
       }
       return [...prev, { produto: product, quantidade: 1 }];
     });
+  };
+
+  const handleAddItem = (product: Produto) => {
+    // Check for Addons
+    const config = addonConfigs.find(c => c.produtoPrincipalId === product.id);
+    if (config) {
+      setPendingAddonProduct({ product, config });
+      setSelectedAddons([]);
+      setIsAddonModalOpen(true);
+      setProductSearch('');
+      setIsProductModalOpen(false); // Close other modals if open
+      return;
+    }
+
+    addItemToCart(product, 1);
     setProductSearch('');
+    setIsProductModalOpen(false);
+  };
+
+  const handleConfirmAddons = () => {
+    if (!pendingAddonProduct) return;
+
+    const { product, config } = pendingAddonProduct;
+    const finalAddons: PedidoItemAdicional[] = [];
+
+    // Calculate free vs paid logic
+    // Logic: First N selected are free. Rest are paid.
+    selectedAddons.forEach((addonId, index) => {
+      const addonProduct = availableProducts.find(p => p.id === addonId);
+      if (addonProduct) {
+        const isFree = index < config.cobrarApartirDe;
+        finalAddons.push({
+          produtoId: addonProduct.id,
+          nome: addonProduct.nome,
+          precoOriginal: addonProduct.preco,
+          precoCobrado: isFree ? 0 : addonProduct.preco
+        });
+      }
+    });
+
+    addItemToCart(product, 1, finalAddons);
+    setIsAddonModalOpen(false);
+    setPendingAddonProduct(null);
+    setSelectedAddons([]);
   };
 
   const handleSelectProductFromModal = (product: Produto) => {
     handleAddItem(product);
-    setIsProductModalOpen(false);
-    setModalProductSearch(''); // Reset modal search
   };
 
-  const handleRemoveItem = (productId: number) => {
-    setCart(prev => prev.filter(item => item.produto.id !== productId));
+  const handleRemoveItem = (index: number) => {
+    setCart(prev => prev.filter((_, i) => i !== index));
   };
 
   const handleSelectClient = (client: Cliente) => {
@@ -147,7 +210,7 @@ const POS: React.FC = () => {
       return;
     }
 
-    const total = cart.reduce((acc, item) => acc + (item.produto.preco * item.quantidade), 0);
+    const total = calculateCartTotal();
     const selectedMethod = paymentMethods.find(p => p.id === selectedPaymentMethodId);
     
     const isCash = selectedMethod?.nome.toLowerCase().includes('dinheiro');
@@ -184,12 +247,34 @@ const POS: React.FC = () => {
     alert(`Atendimento ${newPedido.id} finalizado com sucesso!\nForma: ${selectedMethod?.nome}`);
   };
 
+  const handleCancelOrder = () => {
+    if (cart.length > 0 || selectedClient) {
+      if (!confirm("Tem certeza que deseja cancelar este atendimento? Os dados não salvos serão perdidos.")) {
+        return;
+      }
+    }
+    setView('list');
+  };
+
+  const handleToggleAddon = (id: number) => {
+    setSelectedAddons(prev => {
+        if (prev.includes(id)) {
+            return prev.filter(x => x !== id);
+        } else {
+            return [...prev, id];
+        }
+    });
+  };
+
   // --- Derived State ---
   
   // Normalized Product Filter (Inline Search)
+  // Note: We also filter 'Principal' here to avoid confusion in main cart search
   const filteredProducts = productSearch.length > 0 
     ? availableProducts.filter(p => 
-        p.ativo && (
+        p.ativo && 
+        p.tipo === 'Principal' &&
+        (
           normalizeText(p.nome).includes(normalizeText(productSearch)) || 
           p.codigoBarras.includes(productSearch) || 
           normalizeText(p.codigoInterno).includes(normalizeText(productSearch))
@@ -200,7 +285,9 @@ const POS: React.FC = () => {
   // Product Modal Filter
   const [modalProductSearch, setModalProductSearch] = useState('');
   const modalFilteredProducts = availableProducts.filter(p => 
-      p.ativo && (
+      p.ativo && 
+      p.tipo === 'Principal' && // Added Filter
+      (
         normalizeText(p.nome).includes(normalizeText(modalProductSearch)) || 
         p.codigoBarras.includes(modalProductSearch) || 
         normalizeText(p.codigoInterno).includes(normalizeText(modalProductSearch))
@@ -223,7 +310,19 @@ const POS: React.FC = () => {
     normalizeText(c.telefone).includes(normalizeText(modalClientSearch))
   );
 
-  const cartTotal = cart.reduce((acc, item) => acc + (item.produto.preco * item.quantidade), 0);
+  const calculateCartTotal = () => {
+    return cart.reduce((acc, item) => {
+        let itemTotal = item.produto.preco * item.quantidade;
+        if (item.adicionais) {
+            item.adicionais.forEach(add => {
+                itemTotal += add.precoCobrado * item.quantidade;
+            });
+        }
+        return acc + itemTotal;
+    }, 0);
+  };
+  
+  const cartTotal = calculateCartTotal();
   
   const selectedMethodObj = paymentMethods.find(p => p.id === selectedPaymentMethodId);
   const isCashPayment = selectedMethodObj?.nome.toLowerCase().includes('dinheiro');
@@ -313,6 +412,83 @@ const POS: React.FC = () => {
   return (
     <div className="flex flex-col h-[calc(100vh-7rem)] bg-gray-100 -m-6 p-4 relative">
       
+      {/* Addon Modal (Refactored to Checklist) */}
+      {isAddonModalOpen && pendingAddonProduct && (
+        <div className="absolute inset-0 z-[80] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+           <div className="bg-white w-full max-w-lg rounded-xl shadow-2xl flex flex-col animate-in zoom-in duration-200 max-h-[85vh]">
+              <div className="p-6 border-b border-gray-200 bg-gray-50 rounded-t-xl">
+                 <h3 className="text-xl font-bold text-gray-800">{pendingAddonProduct.product.nome}</h3>
+                 <p className="text-sm text-gray-500 mt-1">
+                   Selecione os itens desejados. <span className="text-green-600 font-bold">Grátis até {pendingAddonProduct.config.cobrarApartirDe} itens.</span>
+                 </p>
+              </div>
+              
+              <div className="flex-1 overflow-y-auto p-4">
+                 <div className="space-y-2">
+                     {pendingAddonProduct.config.complementosIds.map((addonId) => {
+                         const addon = availableProducts.find(x => x.id === addonId);
+                         if (!addon) return null;
+                         
+                         const isSelected = selectedAddons.includes(addonId);
+                         const selectionIndex = selectedAddons.indexOf(addonId);
+                         // Logic: if selected, is it within the free limit based on its position?
+                         const isFree = isSelected && (selectionIndex < pendingAddonProduct.config.cobrarApartirDe);
+                         
+                         return (
+                             <div 
+                                key={addonId} 
+                                onClick={() => handleToggleAddon(addonId)}
+                                className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-all select-none ${
+                                    isSelected 
+                                    ? 'bg-blue-50 border-blue-500 shadow-sm' 
+                                    : 'bg-white border-gray-200 hover:border-blue-300'
+                                }`}
+                             >
+                                <div className="flex items-center gap-3">
+                                    <div className={isSelected ? 'text-blue-600' : 'text-gray-300'}>
+                                        {isSelected ? <CheckSquare size={24} /> : <Square size={24} />}
+                                    </div>
+                                    <div className="flex flex-col">
+                                        <span className={`font-bold ${isSelected ? 'text-gray-900' : 'text-gray-600'}`}>
+                                            {addon.nome}
+                                        </span>
+                                        {isSelected && (
+                                            <span className="text-xs font-medium text-gray-500">
+                                                {isFree ? 'Item Gratuito' : 'Item Adicional'}
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
+                                <div className="text-right">
+                                    {isSelected ? (
+                                        isFree 
+                                        ? <span className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-bold uppercase">Grátis</span>
+                                        : <span className="text-blue-700 font-bold text-sm">+ R$ {addon.preco.toFixed(2)}</span>
+                                    ) : (
+                                        <span className="text-gray-400 text-sm font-medium">+ R$ {addon.preco.toFixed(2)}</span>
+                                    )}
+                                </div>
+                             </div>
+                         )
+                     })}
+                 </div>
+              </div>
+
+              <div className="p-4 border-t border-gray-200 bg-gray-50 rounded-b-xl flex justify-between items-center">
+                  <div className="text-sm font-medium text-gray-500">
+                      Selecionados: <span className="text-gray-900 font-bold">{selectedAddons.length}</span>
+                  </div>
+                  <div className="flex gap-3">
+                    <button onClick={() => { setIsAddonModalOpen(false); setPendingAddonProduct(null); }} className="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 font-bold hover:bg-white">Cancelar</button>
+                    <button onClick={handleConfirmAddons} className="px-6 py-2 bg-green-600 text-white rounded-lg font-bold hover:bg-green-700 shadow-lg shadow-green-200">
+                        Confirmar
+                    </button>
+                  </div>
+              </div>
+           </div>
+        </div>
+      )}
+
       {/* Product Search Modal */}
       {isProductModalOpen && (
         <div className="absolute inset-0 z-[70] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
@@ -506,9 +682,14 @@ const POS: React.FC = () => {
            Novo Atendimento
         </h2>
         <div className="flex gap-2">
-            <button onClick={() => setView('list')} className="px-3 py-1 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Cancelar</button>
-            <button onClick={handleInitiatePayment} className="px-4 py-1.5 bg-blue-600 text-white text-sm font-bold rounded-lg hover:bg-blue-700 flex items-center gap-2">
-                <Banknote size={16} /> Finalizar / Pagamento (F5)
+            <button 
+                onClick={handleCancelOrder} 
+                className="px-4 py-1.5 bg-red-100 text-red-700 text-sm font-bold rounded-lg hover:bg-red-200 flex items-center gap-2 border border-red-200 transition-colors"
+            >
+               <X size={18} /> Cancelar Atendimento
+            </button>
+            <button onClick={handleInitiatePayment} className="px-4 py-1.5 bg-blue-600 text-white text-sm font-bold rounded-lg hover:bg-blue-700 flex items-center gap-2 shadow-sm">
+                <Banknote size={18} /> Finalizar / Pagamento (F5)
             </button>
         </div>
       </div>
@@ -636,10 +817,35 @@ const POS: React.FC = () => {
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                            {cart.map((item, index) => (
-                                <tr key={item.produto.id} className="hover:bg-blue-50 transition-colors">
+                            {cart.map((item, index) => {
+                                const mainItemTotal = item.produto.preco * item.quantidade;
+                                let addonsTotal = 0;
+                                if(item.adicionais) {
+                                  item.adicionais.forEach(a => addonsTotal += a.precoCobrado * item.quantidade);
+                                }
+                                const lineTotal = mainItemTotal + addonsTotal;
+
+                                return (
+                                <React.Fragment key={`${item.produto.id}-${index}`}>
+                                <tr className="hover:bg-blue-50 transition-colors">
                                     <td className="p-2 text-sm text-gray-500">{item.produto.codigoInterno}</td>
-                                    <td className="p-2 text-sm font-medium text-gray-800">{item.produto.nome}</td>
+                                    <td className="p-2 text-sm font-medium text-gray-800">
+                                      {item.produto.nome}
+                                      {/* Render Addons */}
+                                      {item.adicionais && item.adicionais.length > 0 && (
+                                        <div className="mt-1 space-y-0.5">
+                                          {item.adicionais.map((addon, idx) => (
+                                            <div key={idx} className="text-xs text-gray-500 flex items-center gap-1.5 ml-2">
+                                              <span className="w-1.5 h-1.5 rounded-full bg-blue-400 block"></span>
+                                              <span>{addon.nome}</span>
+                                              <span className="text-gray-400 font-mono">
+                                                {addon.precoCobrado === 0 ? "(Grátis)" : `(+ R$ ${addon.precoCobrado.toFixed(2)})`}
+                                              </span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </td>
                                     <td className="p-2 text-sm text-center">
                                         <input 
                                             type="number" 
@@ -647,21 +853,22 @@ const POS: React.FC = () => {
                                             onChange={(e) => {
                                                 const val = parseInt(e.target.value);
                                                 if(val > 0) {
-                                                    setCart(prev => prev.map(i => i.produto.id === item.produto.id ? {...i, quantidade: val} : i));
+                                                    setCart(prev => prev.map((it, i) => i === index ? {...it, quantidade: val} : it));
                                                 }
                                             }}
                                             className="w-16 border rounded text-center p-1 focus:ring-2 focus:ring-blue-500 outline-none"
                                         />
                                     </td>
                                     <td className="p-2 text-sm text-right text-gray-600">R$ {item.produto.preco.toFixed(2)}</td>
-                                    <td className="p-2 text-sm font-bold text-right text-blue-700">R$ {(item.produto.preco * item.quantidade).toFixed(2)}</td>
+                                    <td className="p-2 text-sm font-bold text-right text-blue-700">R$ {lineTotal.toFixed(2)}</td>
                                     <td className="p-2 text-center">
-                                        <button onClick={() => handleRemoveItem(item.produto.id)} className="text-red-400 hover:text-red-600 p-1 hover:bg-red-50 rounded">
+                                        <button onClick={() => handleRemoveItem(index)} className="text-red-400 hover:text-red-600 p-1 hover:bg-red-50 rounded">
                                             <Trash2 size={16} />
                                         </button>
                                     </td>
                                 </tr>
-                            ))}
+                                </React.Fragment>
+                            )})}
                              {cart.length === 0 && (
                                 <tr>
                                    <td colSpan={6} className="p-12 text-center text-gray-300 flex flex-col items-center justify-center h-48 w-full absolute">
@@ -670,7 +877,6 @@ const POS: React.FC = () => {
                                    </td>
                                 </tr>
                              )}
-                             {/* Spacer row to ensure last item isn't hidden behind potential overlays */}
                              <tr className="h-2"></tr>
                         </tbody>
                     </table>

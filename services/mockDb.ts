@@ -1,11 +1,12 @@
-import { Cliente, Produto, CaixaMovimento, Pedido, TipoOperacaoCaixa, PedidoStatus, GrupoProduto, FormaPagamento } from '../types';
+import { Cliente, Produto, CaixaMovimento, Pedido, TipoOperacaoCaixa, PedidoStatus, GrupoProduto, FormaPagamento, ConfiguracaoAdicional } from '../types';
 
 export const INITIAL_GROUPS: GrupoProduto[] = [
   { id: 1, nome: 'Lanches' },
   { id: 2, nome: 'Pizzas' },
   { id: 3, nome: 'Bebidas' },
   { id: 4, nome: 'Porções' },
-  { id: 5, nome: 'Sobremesas' },
+  { id: 5, nome: 'Açaí' },
+  { id: 6, nome: 'Adicionais/Complementos' },
 ];
 
 export const INITIAL_PAYMENT_METHODS: FormaPagamento[] = [
@@ -18,12 +19,28 @@ export const INITIAL_PAYMENT_METHODS: FormaPagamento[] = [
 
 // Seed Data
 export const INITIAL_PRODUCTS: Produto[] = [
-  { id: 1, ativo: true, codigoInterno: 'L01', codigoBarras: '7890000001', nome: 'X-Burger Especial', preco: 25.00, custo: 12.00, unidadeMedida: 'UN', grupoProdutoId: 1, imagem: 'https://picsum.photos/200/200?random=1' },
-  { id: 2, ativo: true, codigoInterno: 'P01', codigoBarras: '7890000002', nome: 'Pizza Calabresa M', preco: 45.00, custo: 20.00, unidadeMedida: 'UN', grupoProdutoId: 2, imagem: 'https://picsum.photos/200/200?random=2' },
-  { id: 3, ativo: true, codigoInterno: 'B01', codigoBarras: '7890000003', nome: 'Coca-Cola 2L', preco: 12.00, custo: 7.50, unidadeMedida: 'UN', grupoProdutoId: 3, imagem: 'https://picsum.photos/200/200?random=3' },
-  { id: 4, ativo: true, codigoInterno: 'PT01', codigoBarras: '7890000004', nome: 'Batata Frita G', preco: 18.00, custo: 8.00, unidadeMedida: 'POR', grupoProdutoId: 4, imagem: 'https://picsum.photos/200/200?random=4' },
-  { id: 5, ativo: true, codigoInterno: 'S01', codigoBarras: '7890000005', nome: 'Açaí 500ml', preco: 22.00, custo: 10.00, unidadeMedida: 'UN', grupoProdutoId: 5, imagem: 'https://picsum.photos/200/200?random=5' },
-  { id: 6, ativo: true, codigoInterno: 'B02', codigoBarras: '7890000006', nome: 'Suco Natural', preco: 10.00, custo: 4.00, unidadeMedida: 'UN', grupoProdutoId: 3, imagem: 'https://picsum.photos/200/200?random=6' },
+  { id: 1, ativo: true, tipo: 'Principal', codigoInterno: 'L01', codigoBarras: '7890000001', nome: 'X-Burger Especial', preco: 25.00, custo: 12.00, unidadeMedida: 'UN', grupoProdutoId: 1, imagem: 'https://picsum.photos/200/200?random=1' },
+  { id: 2, ativo: true, tipo: 'Principal', codigoInterno: 'P01', codigoBarras: '7890000002', nome: 'Pizza Calabresa M', preco: 45.00, custo: 20.00, unidadeMedida: 'UN', grupoProdutoId: 2, imagem: 'https://picsum.photos/200/200?random=2' },
+  { id: 3, ativo: true, tipo: 'Principal', codigoInterno: 'B01', codigoBarras: '7890000003', nome: 'Coca-Cola 2L', preco: 12.00, custo: 7.50, unidadeMedida: 'UN', grupoProdutoId: 3, imagem: 'https://picsum.photos/200/200?random=3' },
+  { id: 4, ativo: true, tipo: 'Principal', codigoInterno: 'PT01', codigoBarras: '7890000004', nome: 'Batata Frita G', preco: 18.00, custo: 8.00, unidadeMedida: 'POR', grupoProdutoId: 4, imagem: 'https://picsum.photos/200/200?random=4' },
+  
+  // Açaí Scenario
+  { id: 5, ativo: true, tipo: 'Principal', codigoInterno: 'AC300', codigoBarras: '7890000005', nome: 'Açaí 300ml', preco: 15.00, custo: 5.00, unidadeMedida: 'UN', grupoProdutoId: 5 },
+  { id: 6, ativo: true, tipo: 'Principal', codigoInterno: 'AC500', codigoBarras: '7890000006', nome: 'Açaí 500ml', preco: 22.00, custo: 8.00, unidadeMedida: 'UN', grupoProdutoId: 5 },
+  
+  // Complementos
+  { id: 100, ativo: true, tipo: 'Complemento', codigoInterno: 'AD01', codigoBarras: '', nome: 'Leite Ninho', preco: 3.00, custo: 0.50, unidadeMedida: 'POR', grupoProdutoId: 6 },
+  { id: 101, ativo: true, tipo: 'Complemento', codigoInterno: 'AD02', codigoBarras: '', nome: 'Granola', preco: 2.00, custo: 0.30, unidadeMedida: 'POR', grupoProdutoId: 6 },
+  { id: 102, ativo: true, tipo: 'Complemento', codigoInterno: 'AD03', codigoBarras: '', nome: 'Paçoca', preco: 2.00, custo: 0.30, unidadeMedida: 'POR', grupoProdutoId: 6 },
+  { id: 103, ativo: true, tipo: 'Complemento', codigoInterno: 'AD04', codigoBarras: '', nome: 'Morango', preco: 4.00, custo: 1.00, unidadeMedida: 'POR', grupoProdutoId: 6 },
+  { id: 104, ativo: true, tipo: 'Complemento', codigoInterno: 'AD05', codigoBarras: '', nome: 'Banana', preco: 2.00, custo: 0.50, unidadeMedida: 'POR', grupoProdutoId: 6 },
+];
+
+export const INITIAL_ADDON_CONFIGS: ConfiguracaoAdicional[] = [
+  // Açaí 300ml: 3 Free items
+  { id: 1, produtoPrincipalId: 5, cobrarApartirDe: 3, complementosIds: [100, 101, 102, 103, 104] },
+  // Açaí 500ml: 5 Free items
+  { id: 2, produtoPrincipalId: 6, cobrarApartirDe: 5, complementosIds: [100, 101, 102, 103, 104] }
 ];
 
 export const INITIAL_CLIENTS: Cliente[] = [
@@ -59,6 +76,7 @@ class MockDbContext {
   private grupos: GrupoProduto[] = [...INITIAL_GROUPS];
   private clientes: Cliente[] = [...INITIAL_CLIENTS];
   private formasPagamento: FormaPagamento[] = [...INITIAL_PAYMENT_METHODS];
+  private configAdicionais: ConfiguracaoAdicional[] = [...INITIAL_ADDON_CONFIGS];
 
   constructor() {
     // Seed initial cash opening
@@ -136,6 +154,8 @@ class MockDbContext {
 
   deleteProduto(id: number) {
     this.produtos = this.produtos.filter(p => p.id !== id);
+    // Also delete any addon config for this product if it was a main product
+    this.configAdicionais = this.configAdicionais.filter(c => c.produtoPrincipalId !== id);
   }
 
   // --- Clientes ---
@@ -174,6 +194,28 @@ class MockDbContext {
 
   deleteFormaPagamento(id: number) {
     this.formasPagamento = this.formasPagamento.filter(f => f.id !== id);
+  }
+
+  // --- Configuracao Adicionais ---
+  getConfiguracoesAdicionais() {
+    return [...this.configAdicionais];
+  }
+  
+  getConfiguracaoByProdutoPrincipal(produtoId: number): ConfiguracaoAdicional | undefined {
+    return this.configAdicionais.find(c => c.produtoPrincipalId === produtoId);
+  }
+
+  saveConfiguracaoAdicional(config: ConfiguracaoAdicional) {
+    if (config.id === 0) {
+       const newId = Math.max(...this.configAdicionais.map(c => c.id), 0) + 1;
+       this.configAdicionais.push({ ...config, id: newId });
+    } else {
+       this.configAdicionais = this.configAdicionais.map(c => c.id === config.id ? config : c);
+    }
+  }
+
+  deleteConfiguracaoAdicional(id: number) {
+    this.configAdicionais = this.configAdicionais.filter(c => c.id !== id);
   }
 }
 

@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { HashRouter, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
-import { LayoutDashboard, ShoppingCart, DollarSign, Menu, X, Store, Package, Users, Folder, CreditCard } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, DollarSign, Menu, X, Store, Package, Users, Folder, CreditCard, Layers } from 'lucide-react';
 import Dashboard from './components/Dashboard';
 import POS from './components/POS';
 import CashControl from './components/CashControl';
 import Products from './components/Products';
 import Clients from './components/Clients';
 import PaymentMethods from './components/PaymentMethods';
+import AddonConfig from './components/AddonConfig';
 
 const SidebarLink = ({ to, icon: Icon, label }: { to: string, icon: React.ElementType, label: string }) => {
   const location = useLocation();
@@ -52,6 +53,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           <div className="pt-4 mt-4 border-t border-gray-100">
             {sidebarOpen && <h3 className="px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Cadastros</h3>}
             <SidebarLink to="/produtos" icon={Package} label={sidebarOpen ? "Produtos" : ""} />
+            <SidebarLink to="/config-adicionais" icon={Layers} label={sidebarOpen ? "Config. Adicionais" : ""} />
             <SidebarLink to="/clientes" icon={Users} label={sidebarOpen ? "Clientes" : ""} />
             <SidebarLink to="/formas-pagamento" icon={CreditCard} label={sidebarOpen ? "Formas de Pagamento" : ""} />
           </div>
@@ -88,6 +90,7 @@ const App: React.FC = () => {
           <Route path="/vendas" element={<POS />} />
           <Route path="/caixa" element={<CashControl />} />
           <Route path="/produtos" element={<Products />} />
+          <Route path="/config-adicionais" element={<AddonConfig />} />
           <Route path="/clientes" element={<Clients />} />
           <Route path="/formas-pagamento" element={<PaymentMethods />} />
           <Route path="*" element={<Navigate to="/" replace />} />

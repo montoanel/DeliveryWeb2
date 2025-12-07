@@ -42,9 +42,12 @@ export interface GrupoProduto {
   nome: string;
 }
 
+export type TipoProduto = 'Principal' | 'Complemento';
+
 export interface Produto {
   id: number;
   ativo: boolean; // Status
+  tipo: TipoProduto; // New field
   codigoInterno: string;
   codigoBarras: string;
   nome: string;
@@ -55,15 +58,30 @@ export interface Produto {
   imagem?: string;
 }
 
+export interface ConfiguracaoAdicional {
+  id: number;
+  produtoPrincipalId: number;
+  cobrarApartirDe: number; // Quantidade gratuita. Ex: 3 (cobra a partir do 4º)
+  complementosIds: number[];
+}
+
 export interface FormaPagamento {
   id: number;
   nome: string; // Dinheiro, Cartão Crédito, PIX
   ativo: boolean;
 }
 
+export interface PedidoItemAdicional {
+  produtoId: number;
+  nome: string;
+  precoOriginal: number;
+  precoCobrado: number; // Pode ser 0 se estiver dentro da gratuidade
+}
+
 export interface PedidoItem {
   produto: Produto;
   quantidade: number;
+  adicionais?: PedidoItemAdicional[]; // New field
 }
 
 export interface Pedido {

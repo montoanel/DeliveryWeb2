@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../services/mockDb';
-import { Produto, GrupoProduto } from '../types';
+import { Produto, GrupoProduto, TipoProduto } from '../types';
 import { Plus, Search, Edit2, Trash2, Save, X, Package } from 'lucide-react';
 
 const Products: React.FC = () => {
@@ -13,6 +13,7 @@ const Products: React.FC = () => {
   const initialFormState: Produto = {
     id: 0,
     ativo: true,
+    tipo: 'Principal',
     codigoInterno: '',
     codigoBarras: '',
     nome: '',
@@ -82,7 +83,7 @@ const Products: React.FC = () => {
 
         <form onSubmit={handleSave} className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
           
-          {/* Top Row: Status & ID */}
+          {/* Top Row: Status & Type & ID */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
             <div className="md:col-span-1">
               <label className="block text-sm font-medium text-gray-700 mb-2">Situação</label>
@@ -93,6 +94,18 @@ const Products: React.FC = () => {
               >
                 <option value="true">Ativo</option>
                 <option value="false">Inativo</option>
+              </select>
+            </div>
+
+             <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-2">Tipo de Produto</label>
+              <select 
+                value={formData.tipo}
+                onChange={(e) => setFormData({...formData, tipo: e.target.value as TipoProduto})}
+                className="w-full p-2.5 rounded-lg border border-gray-300 font-medium focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="Principal">Principal (Ex: Lanche, Açaí)</option>
+                <option value="Complemento">Complemento (Ex: Adicional, Borda)</option>
               </select>
             </div>
             
@@ -251,7 +264,7 @@ const Products: React.FC = () => {
               <th className="p-4 font-semibold text-gray-600 text-sm">Status</th>
               <th className="p-4 font-semibold text-gray-600 text-sm">Código</th>
               <th className="p-4 font-semibold text-gray-600 text-sm">Nome</th>
-              <th className="p-4 font-semibold text-gray-600 text-sm">Grupo</th>
+              <th className="p-4 font-semibold text-gray-600 text-sm">Tipo</th>
               <th className="p-4 font-semibold text-gray-600 text-sm">Preço</th>
               <th className="p-4 font-semibold text-gray-600 text-sm text-right">Ações</th>
             </tr>
@@ -269,8 +282,10 @@ const Products: React.FC = () => {
                   <div className="text-[10px] text-gray-400">{product.codigoBarras}</div>
                 </td>
                 <td className="p-4 font-medium text-gray-800">{product.nome}</td>
-                <td className="p-4 text-sm text-gray-500">
-                  {groups.find(g => g.id === product.grupoProdutoId)?.nome || '-'}
+                <td className="p-4">
+                    <span className={`text-xs px-2 py-0.5 rounded border ${product.tipo === 'Principal' ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-orange-50 border-orange-200 text-orange-700'}`}>
+                        {product.tipo}
+                    </span>
                 </td>
                 <td className="p-4 font-medium text-gray-800">R$ {product.preco.toFixed(2)}</td>
                 <td className="p-4 text-right">
