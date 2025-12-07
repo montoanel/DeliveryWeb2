@@ -15,7 +15,7 @@ export enum TipoOperacaoCaixa {
 }
 
 export enum PedidoStatus {
-  Pendente = 'Pendente',
+  Pendente = 'Pendente', // Aberto ou Parcialmente Pago
   Pago = 'Pago',
   Entregue = 'Entregue',
   Cancelado = 'Cancelado'
@@ -84,6 +84,14 @@ export interface PedidoItem {
   adicionais?: PedidoItemAdicional[]; // New field
 }
 
+export interface Pagamento {
+  id: string;
+  data: string;
+  formaPagamentoId: number;
+  formaPagamentoNome: string;
+  valor: number;
+}
+
 export interface Pedido {
   id: number;
   data: string; // ISO String
@@ -93,10 +101,12 @@ export interface Pedido {
   total: number;
   status: PedidoStatus;
   itens: PedidoItem[];
-  // Payment Details
-  formaPagamentoId?: number;
-  formaPagamentoNome?: string;
-  valorRecebido?: number; // Para cálculo de troco em dinheiro
+  
+  // Payment Details (Updated for Partial Payments)
+  pagamentos: Pagamento[]; 
+  
+  // Legacy fields kept optional for backward compatibility types, but logic moves to 'pagamentos'
+  valorRecebido?: number; 
   troco?: number;
 }
 

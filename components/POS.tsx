@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Produto, PedidoItem, Cliente, TipoAtendimento, PedidoStatus, Pedido, FormaPagamento, ConfiguracaoAdicional, PedidoItemAdicional } from '../types';
+import { Produto, PedidoItem, Cliente, TipoAtendimento, PedidoStatus, Pedido, FormaPagamento, ConfiguracaoAdicional, PedidoItemAdicional, Pagamento } from '../types';
 import { db } from '../services/mockDb';
 import { 
   Search, Plus, Trash2, User, Truck, ShoppingBag, 
-  ClipboardList, Zap, Save, X, Calculator, Calendar, CreditCard, Banknote, MapPin, Package, CheckSquare, Square
+  ClipboardList, Zap, Save, X, Calculator, Calendar, CreditCard, Banknote, MapPin, Package, CheckSquare, Square, Edit
 } from 'lucide-react';
 
 // Helper for accent-insensitive search
@@ -22,6 +22,10 @@ const POS: React.FC = () => {
   const [addonConfigs, setAddonConfigs] = useState<ConfiguracaoAdicional[]>([]);
 
   // --- Form State ---
+  const [editingOrderId, setEditingOrderId] = useState<number | null>(null);
+  const [currentOrderStatus, setCurrentOrderStatus] = useState<PedidoStatus>(PedidoStatus.Pendente);
+  const [existingPayments, setExistingPayments] = useState<Pagamento[]>([]);
+  
   const [currentOrderType, setCurrentOrderType] = useState<TipoAtendimento>(TipoAtendimento.VendaRapida);
   const [cart, setCart] = useState<PedidoItem[]>([]);
   const [selectedClient, setSelectedClient] = useState<Cliente | null>(null);
@@ -42,7 +46,7 @@ const POS: React.FC = () => {
   const [selectedAddons, setSelectedAddons] = useState<number[]>([]);
 
   const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState<number | null>(null);
-  const [receivedAmount, setReceivedAmount] = useState<string>(''); 
+  const [paymentInputValue, setPaymentInputValue] = useState<string>(''); 
 
   // --- Data Loading ---
   const refreshData = () => {
@@ -71,26 +75,30 @@ const POS: React.FC = () => {
         }
         if (e.key === 'F5') {
           e.preventDefault();
-          handleInitiatePayment();
+          // Logic for F5 depends on type
+          if (currentOrderType === TipoAtendimento.VendaRapida || (editingOrderId && currentOrderStatus === PedidoStatus.Pendente)) {
+             handleInitiatePayment();
+          }
         }
         if (e.key === 'Escape' && !isPaymentModalOpen && !isClientModalOpen && !isProductModalOpen && !isAddonModalOpen) {
-          if(confirm("Deseja realmente cancelar este atendimento?")) {
-            setView('list');
-          }
+           handleCancelOrder();
         }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [view, cart, currentOrderType, selectedClient, isPaymentModalOpen, isClientModalOpen, isProductModalOpen, isAddonModalOpen]); 
+  }, [view, cart, currentOrderType, selectedClient, isPaymentModalOpen, isClientModalOpen, isProductModalOpen, isAddonModalOpen, editingOrderId, currentOrderStatus]); 
 
   // --- Handlers ---
 
   const handleNewOrder = (type: TipoAtendimento) => {
     refreshData(); 
     setCurrentOrderType(type);
+    setCurrentOrderStatus(PedidoStatus.Pendente);
+    setEditingOrderId(null);
     setCart([]);
+    setExistingPayments([]);
     setSelectedClient(null);
     setObservation('');
     setProductSearch('');
@@ -104,14 +112,35 @@ const POS: React.FC = () => {
     setSelectedAddons([]);
 
     setSelectedPaymentMethodId(null);
-    setReceivedAmount('');
+    setPaymentInputValue('');
+    
+    setView('form');
+  };
+
+  const handleEditOrder = (order: Pedido) => {
+    refreshData();
+    setEditingOrderId(order.id);
+    setCurrentOrderType(order.tipoAtendimento);
+    setCurrentOrderStatus(order.status);
+    setExistingPayments(order.pagamentos || []);
+    
+    // Deep copy items to avoid mutating ref until save
+    setCart(order.itens.map(i => ({
+        ...i,
+        adicionais: i.adicionais ? [...i.adicionais] : undefined
+    })));
+    
+    const client = availableClients.find(c => c.id === order.clienteId);
+    setSelectedClient(client || (order.clienteId ? { id: order.clienteId, nome: order.clienteNome || 'Cliente', cpfCnpj: '', telefone: '', endereco: '', numero: '', complemento: '', bairro: '', tipoPessoa: 'Física' } : null));
+    
+    setObservation(''); // Obs not currently in Pedido model, skipping restore
     
     setView('form');
   };
 
   const addItemToCart = (product: Produto, quantity: number, addons?: PedidoItemAdicional[]) => {
     setCart(prev => {
-      // If it has addons, we always add as a new item line, because addons might differ
+      // If it has addons, we always add as a new item line
       if (addons && addons.length > 0) {
         return [...prev, { produto: product, quantidade: quantity, adicionais: addons }];
       }
@@ -130,14 +159,13 @@ const POS: React.FC = () => {
   };
 
   const handleAddItem = (product: Produto) => {
-    // Check for Addons
     const config = addonConfigs.find(c => c.produtoPrincipalId === product.id);
     if (config) {
       setPendingAddonProduct({ product, config });
       setSelectedAddons([]);
       setIsAddonModalOpen(true);
       setProductSearch('');
-      setIsProductModalOpen(false); // Close other modals if open
+      setIsProductModalOpen(false);
       return;
     }
 
@@ -153,7 +181,6 @@ const POS: React.FC = () => {
     const finalAddons: PedidoItemAdicional[] = [];
 
     // Calculate free vs paid logic
-    // Logic: First N selected are free. Rest are paid.
     selectedAddons.forEach((addonId, index) => {
       const addonProduct = availableProducts.find(p => p.id === addonId);
       if (addonProduct) {
@@ -187,6 +214,41 @@ const POS: React.FC = () => {
     setIsClientModalOpen(false);
   };
 
+  // --- SAVE ACTIONS ---
+
+  // 1. Save as Pending (For Delivery/Encomenda)
+  const handleSavePendingOrder = () => {
+    if (cart.length === 0) {
+        alert("O pedido precisa ter pelo menos um item.");
+        return;
+    }
+    if ((currentOrderType === TipoAtendimento.Delivery || currentOrderType === TipoAtendimento.Encomenda) && !selectedClient) {
+        alert("Para este tipo de atendimento, o Cliente é obrigatório.");
+        return;
+    }
+
+    const total = calculateCartTotal();
+    const id = editingOrderId || (Math.floor(Math.random() * 10000) + 1000);
+
+    const pedido: Pedido = {
+        id,
+        data: editingOrderId ? orders.find(o => o.id === editingOrderId)?.data || new Date().toISOString() : new Date().toISOString(),
+        tipoAtendimento: currentOrderType,
+        clienteId: selectedClient?.id,
+        clienteNome: selectedClient?.nome || 'Consumidor Final',
+        total: total,
+        status: existingPayments.length > 0 ? currentOrderStatus : PedidoStatus.Pendente, // Trust current calculated status or keep pendente
+        itens: cart,
+        pagamentos: existingPayments // preserve payments
+    };
+
+    db.savePedido(pedido);
+    refreshData();
+    setView('list');
+    alert(`Pedido #${id} salvo com sucesso!`);
+  };
+
+  // 2. Open Payment Modal (For Finalizing)
   const handleInitiatePayment = () => {
     if (cart.length === 0) {
       alert("O pedido precisa ter pelo menos um item.");
@@ -198,61 +260,138 @@ const POS: React.FC = () => {
       return;
     }
 
+    // Default to Cash
     const moneyMethod = paymentMethods.find(p => p.nome.toLowerCase().includes('dinheiro'));
     setSelectedPaymentMethodId(moneyMethod ? moneyMethod.id : (paymentMethods[0]?.id || null));
-    setReceivedAmount('');
+    
+    // Set default value to remaining
+    const total = calculateCartTotal();
+    const paid = calculateTotalPaid();
+    const remaining = total - paid;
+    setPaymentInputValue(remaining > 0 ? remaining.toFixed(2) : '0.00');
+    
     setIsPaymentModalOpen(true);
   };
 
-  const handleFinalizeOrder = () => {
-    if (!selectedPaymentMethodId) {
-      alert("Selecione uma forma de pagamento.");
-      return;
+  const handleClosePaymentModal = () => {
+    // Sync state with DB in case partial payments were made
+    if (editingOrderId) {
+        const freshOrder = db.getPedidoById(editingOrderId);
+        if (freshOrder) {
+            setExistingPayments(freshOrder.pagamentos);
+            setCurrentOrderStatus(freshOrder.status);
+        }
     }
+    setIsPaymentModalOpen(false);
+  };
 
-    const total = calculateCartTotal();
-    const selectedMethod = paymentMethods.find(p => p.id === selectedPaymentMethodId);
-    
-    const isCash = selectedMethod?.nome.toLowerCase().includes('dinheiro');
-    let troco = 0;
-    let valorRec = isCash ? parseFloat(receivedAmount.replace(',', '.')) : total;
+  // 3. Register Partial Payment
+  const handleRegisterPayment = () => {
+     if (!selectedPaymentMethodId) {
+       alert("Selecione uma forma de pagamento.");
+       return;
+     }
 
-    if (isCash) {
-        if (isNaN(valorRec) || valorRec < total) {
-            alert(`O valor recebido deve ser maior ou igual ao total (R$ ${total.toFixed(2)})`);
+     const amountToPay = parseFloat(paymentInputValue.replace(',', '.'));
+     const total = calculateCartTotal();
+     const paid = calculateTotalPaid();
+     const remaining = total - paid;
+
+     if (isNaN(amountToPay) || amountToPay <= 0) {
+       alert("Valor inválido.");
+       return;
+     }
+
+     // Ensure order exists before adding payment
+     let orderId = editingOrderId;
+     if (!orderId) {
+        // Create order first
+        orderId = (Math.floor(Math.random() * 10000) + 1000);
+        const pedido: Pedido = {
+            id: orderId,
+            data: new Date().toISOString(),
+            tipoAtendimento: currentOrderType,
+            clienteId: selectedClient?.id,
+            clienteNome: selectedClient?.nome || 'Consumidor Final',
+            total: total,
+            status: PedidoStatus.Pendente,
+            itens: cart,
+            pagamentos: []
+        };
+        db.savePedido(pedido);
+        setEditingOrderId(orderId);
+     } else {
+        // Update order total/items before payment just in case
+        const pedido: Pedido = {
+            id: orderId,
+            data: orders.find(o => o.id === orderId)?.data || new Date().toISOString(),
+            tipoAtendimento: currentOrderType,
+            clienteId: selectedClient?.id,
+            clienteNome: selectedClient?.nome || 'Consumidor Final',
+            total: total,
+            status: currentOrderStatus,
+            itens: cart,
+            pagamentos: existingPayments
+        };
+        db.savePedido(pedido);
+     }
+
+     const selectedMethod = paymentMethods.find(p => p.id === selectedPaymentMethodId);
+     
+     let realPayment = amountToPay;
+     let change = 0;
+     
+     if (amountToPay > (remaining + 0.01)) {
+        if (selectedMethod?.nome.toLowerCase().includes('dinheiro')) {
+            change = amountToPay - remaining;
+            realPayment = remaining;
+        } else {
+            alert(`O valor não pode ser maior que o restante (R$ ${remaining.toFixed(2)}).`);
             return;
         }
-        troco = valorRec - total;
-    }
+     }
 
-    const newPedido: Pedido = {
-      id: Math.floor(Math.random() * 10000) + 1000,
-      data: new Date().toISOString(),
-      tipoAtendimento: currentOrderType,
-      clienteId: selectedClient?.id,
-      clienteNome: selectedClient?.nome || 'Consumidor Final',
-      total: total,
-      status: PedidoStatus.Pago,
-      itens: cart,
-      formaPagamentoId: selectedMethod?.id,
-      formaPagamentoNome: selectedMethod?.nome,
-      valorRecebido: valorRec,
-      troco: troco
-    };
+     const newPayment: Pagamento = {
+       id: Math.random().toString(36).substr(2, 9),
+       data: new Date().toISOString(),
+       formaPagamentoId: selectedMethod!.id,
+       formaPagamentoNome: selectedMethod!.nome,
+       valor: realPayment
+     };
 
-    db.addPedido(newPedido);
-    refreshData();
-    setIsPaymentModalOpen(false);
-    setView('list');
-    alert(`Atendimento ${newPedido.id} finalizado com sucesso!\nForma: ${selectedMethod?.nome}`);
+     // Execute DB Operation
+     db.addPagamento(orderId, newPayment);
+     
+     refreshData(); // Refresh background list immediately
+
+     // Refresh Local State
+     const updatedOrder = db.getPedidoById(orderId);
+     if (updatedOrder) {
+        setExistingPayments(updatedOrder.pagamentos);
+        setCurrentOrderStatus(updatedOrder.status);
+        
+        // Show Feedback
+        if (change > 0) {
+             alert(`Pagamento registrado!\n\nTROCO: R$ ${change.toFixed(2)}`);
+        }
+        
+        // Check if finished
+        const newTotalPaid = updatedOrder.pagamentos.reduce((acc, p) => acc + p.valor, 0);
+        const newRemaining = updatedOrder.total - newTotalPaid;
+        
+        if (newRemaining <= 0.01) {
+            // Fully Paid
+            setIsPaymentModalOpen(false);
+            setView('list');
+            alert(`Atendimento #${orderId} finalizado com sucesso!`);
+        } else {
+            // Still Partial - Reset input to new remaining
+            setPaymentInputValue(newRemaining.toFixed(2));
+        }
+     }
   };
 
   const handleCancelOrder = () => {
-    if (cart.length > 0 || selectedClient) {
-      if (!confirm("Tem certeza que deseja cancelar este atendimento? Os dados não salvos serão perdidos.")) {
-        return;
-      }
-    }
     setView('list');
   };
 
@@ -268,8 +407,6 @@ const POS: React.FC = () => {
 
   // --- Derived State ---
   
-  // Normalized Product Filter (Inline Search)
-  // Note: We also filter 'Principal' here to avoid confusion in main cart search
   const filteredProducts = productSearch.length > 0 
     ? availableProducts.filter(p => 
         p.ativo && 
@@ -282,11 +419,10 @@ const POS: React.FC = () => {
       )
     : [];
 
-  // Product Modal Filter
   const [modalProductSearch, setModalProductSearch] = useState('');
   const modalFilteredProducts = availableProducts.filter(p => 
       p.ativo && 
-      p.tipo === 'Principal' && // Added Filter
+      p.tipo === 'Principal' &&
       (
         normalizeText(p.nome).includes(normalizeText(modalProductSearch)) || 
         p.codigoBarras.includes(modalProductSearch) || 
@@ -294,14 +430,12 @@ const POS: React.FC = () => {
       )
   );
 
-  // Normalized Client Filter (Autocomplete)
   const filteredClients = availableClients.filter(c => 
     normalizeText(c.nome).includes(normalizeText(clientSearch)) || 
     c.id.toString() === clientSearch ||
     c.cpfCnpj.includes(clientSearch)
   );
 
-  // Client Search Modal Filter
   const [modalClientSearch, setModalClientSearch] = useState('');
   const modalFilteredClients = availableClients.filter(c => 
     normalizeText(c.nome).includes(normalizeText(modalClientSearch)) || 
@@ -322,11 +456,20 @@ const POS: React.FC = () => {
     }, 0);
   };
   
+  const calculateTotalPaid = () => {
+      return existingPayments.reduce((acc, p) => acc + p.valor, 0);
+  };
+  
   const cartTotal = calculateCartTotal();
+  const totalPaid = calculateTotalPaid();
+  const remainingTotal = Math.max(0, cartTotal - totalPaid);
   
   const selectedMethodObj = paymentMethods.find(p => p.id === selectedPaymentMethodId);
   const isCashPayment = selectedMethodObj?.nome.toLowerCase().includes('dinheiro');
-  const changeValue = isCashPayment && receivedAmount ? Math.max(0, parseFloat(receivedAmount.replace(',','.')) - cartTotal) : 0;
+  
+  // Change calculation purely for visual aid in the modal
+  const inputValueFloat = parseFloat(paymentInputValue) || 0;
+  const potentialChange = (isCashPayment && inputValueFloat > remainingTotal) ? inputValueFloat - remainingTotal : 0;
 
   const getStatusColor = (status: PedidoStatus) => {
     switch(status) {
@@ -335,6 +478,50 @@ const POS: React.FC = () => {
       case PedidoStatus.Cancelado: return 'bg-red-100 text-red-700';
       default: return 'bg-gray-100 text-gray-700';
     }
+  };
+
+  // Render Action Buttons based on Logic
+  const renderActionButtons = () => {
+     // Scenario 1: Quick Sale (Always Immediate)
+     if (currentOrderType === TipoAtendimento.VendaRapida) {
+         return (
+            <button onClick={handleInitiatePayment} className="px-4 py-1.5 bg-blue-600 text-white text-sm font-bold rounded-lg hover:bg-blue-700 flex items-center gap-2 shadow-sm">
+                <Banknote size={18} /> Finalizar / Pagamento (F5)
+            </button>
+         )
+     }
+
+     // Scenario 2: Other Types
+     if (editingOrderId && currentOrderStatus === PedidoStatus.Pendente) {
+         return (
+             <div className="flex gap-2">
+                 <button onClick={handleSavePendingOrder} className="px-4 py-1.5 bg-yellow-500 text-white text-sm font-bold rounded-lg hover:bg-yellow-600 flex items-center gap-2 shadow-sm">
+                    <Save size={18} /> Salvar Alterações
+                 </button>
+                 <button onClick={handleInitiatePayment} className="px-4 py-1.5 bg-green-600 text-white text-sm font-bold rounded-lg hover:bg-green-700 flex items-center gap-2 shadow-sm">
+                    <Banknote size={18} /> Receber (Baixar)
+                 </button>
+             </div>
+         )
+     }
+
+     if (!editingOrderId) {
+        return (
+            <div className="flex gap-2">
+                 <button onClick={handleSavePendingOrder} className="px-4 py-1.5 bg-blue-600 text-white text-sm font-bold rounded-lg hover:bg-blue-700 flex items-center gap-2 shadow-sm">
+                    <Save size={18} /> Salvar Pedido
+                 </button>
+             </div>
+        )
+     }
+
+     if (currentOrderStatus === PedidoStatus.Pago) {
+         return (
+            <div className="bg-green-100 text-green-800 px-3 py-1 rounded text-sm font-bold flex items-center gap-2">
+                <CheckSquare size={16}/> Pedido Pago / Fechado
+            </div>
+         )
+     }
   };
 
   if (view === 'list') {
@@ -375,19 +562,31 @@ const POS: React.FC = () => {
                 <th className="p-3 text-xs font-bold text-gray-600 uppercase">ID</th>
                 <th className="p-3 text-xs font-bold text-gray-600 uppercase">Data/Hora</th>
                 <th className="p-3 text-xs font-bold text-gray-600 uppercase">Cliente</th>
-                <th className="p-3 text-xs font-bold text-gray-600 uppercase">Pagamento</th>
+                <th className="p-3 text-xs font-bold text-gray-600 uppercase">Pagamentos</th>
                 <th className="p-3 text-xs font-bold text-gray-600 uppercase text-right">Total (R$)</th>
                 <th className="p-3 text-xs font-bold text-gray-600 uppercase text-center">Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {orders.map(order => (
-                <tr key={order.id} className="hover:bg-blue-50 transition-colors cursor-pointer">
-                  <td className="p-3 text-sm font-medium text-gray-700">{order.tipoAtendimento}</td>
+              {orders.map(order => {
+                  const paid = order.pagamentos?.reduce((acc, p) => acc + p.valor, 0) || 0;
+                  return (
+                <tr key={order.id} onClick={() => handleEditOrder(order)} className="hover:bg-blue-50 transition-colors cursor-pointer group">
+                  <td className="p-3 text-sm font-medium text-gray-700">
+                      <div className="flex items-center gap-2">
+                        {order.status === PedidoStatus.Pendente && <Edit size={14} className="text-blue-400 opacity-0 group-hover:opacity-100"/>}
+                        {order.tipoAtendimento}
+                      </div>
+                  </td>
                   <td className="p-3 text-sm text-gray-500">{order.id}</td>
                   <td className="p-3 text-sm text-gray-500">{new Date(order.data).toLocaleString()}</td>
                   <td className="p-3 text-sm text-gray-700">{order.clienteNome}</td>
-                   <td className="p-3 text-sm text-gray-600">{order.formaPagamentoNome || '-'}</td>
+                   <td className="p-3 text-sm text-gray-600">
+                     {order.pagamentos && order.pagamentos.length > 0 
+                        ? `${order.pagamentos.length}x (${paid.toFixed(2)})`
+                        : '-'
+                     }
+                   </td>
                   <td className="p-3 text-sm font-bold text-gray-800 text-right">{order.total.toFixed(2)}</td>
                   <td className="p-3 text-center">
                     <span className={`px-2 py-1 rounded text-xs font-bold ${getStatusColor(order.status)}`}>
@@ -395,7 +594,7 @@ const POS: React.FC = () => {
                     </span>
                   </td>
                 </tr>
-              ))}
+              )})}
               {orders.length === 0 && (
                 <tr>
                    <td colSpan={7} className="p-10 text-center text-gray-400">Nenhum atendimento encontrado hoje.</td>
@@ -408,13 +607,14 @@ const POS: React.FC = () => {
     );
   }
 
-  // --- FORM VIEW (NOVO ATENDIMENTO) ---
+  // --- FORM VIEW ---
   return (
     <div className="flex flex-col h-[calc(100vh-7rem)] bg-gray-100 -m-6 p-4 relative">
       
-      {/* Addon Modal (Refactored to Checklist) */}
+      {/* Addon Modal */}
       {isAddonModalOpen && pendingAddonProduct && (
         <div className="absolute inset-0 z-[80] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+           {/* ... existing addon modal code ... */}
            <div className="bg-white w-full max-w-lg rounded-xl shadow-2xl flex flex-col animate-in zoom-in duration-200 max-h-[85vh]">
               <div className="p-6 border-b border-gray-200 bg-gray-50 rounded-t-xl">
                  <h3 className="text-xl font-bold text-gray-800">{pendingAddonProduct.product.nome}</h3>
@@ -431,7 +631,6 @@ const POS: React.FC = () => {
                          
                          const isSelected = selectedAddons.includes(addonId);
                          const selectionIndex = selectedAddons.indexOf(addonId);
-                         // Logic: if selected, is it within the free limit based on its position?
                          const isFree = isSelected && (selectionIndex < pendingAddonProduct.config.cobrarApartirDe);
                          
                          return (
@@ -492,6 +691,7 @@ const POS: React.FC = () => {
       {/* Product Search Modal */}
       {isProductModalOpen && (
         <div className="absolute inset-0 z-[70] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+           {/* ... existing product modal code ... */}
            <div className="bg-white w-full max-w-3xl rounded-xl shadow-2xl flex flex-col max-h-[90vh] animate-in zoom-in duration-200">
               <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-xl">
                  <h3 className="font-bold text-gray-700 flex items-center gap-2"><Package size={20}/> Buscar Produto</h3>
@@ -542,9 +742,6 @@ const POS: React.FC = () => {
                     </tbody>
                  </table>
               </div>
-              <div className="p-3 bg-gray-50 text-xs text-gray-500 text-center rounded-b-xl">
-                 Mostrando {modalFilteredProducts.length} registros
-              </div>
            </div>
         </div>
       )}
@@ -552,6 +749,7 @@ const POS: React.FC = () => {
       {/* Client Search Modal */}
       {isClientModalOpen && (
         <div className="absolute inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+           {/* ... existing client modal code ... */}
            <div className="bg-white w-full max-w-2xl rounded-xl shadow-2xl flex flex-col max-h-[90vh] animate-in zoom-in duration-200">
               <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-xl">
                  <h3 className="font-bold text-gray-700 flex items-center gap-2"><User size={20}/> Buscar Cliente</h3>
@@ -599,30 +797,38 @@ const POS: React.FC = () => {
                     </tbody>
                  </table>
               </div>
-              <div className="p-3 bg-gray-50 text-xs text-gray-500 text-center rounded-b-xl">
-                 Mostrando {modalFilteredClients.length} registros
-              </div>
            </div>
         </div>
       )}
 
-      {/* Payment Modal Overlay */}
+      {/* Payment Modal Overlay (UPDATED FOR PARTIAL PAYMENTS) */}
       {isPaymentModalOpen && (
         <div className="absolute inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in duration-200">
                 <div className="bg-blue-600 p-6 text-white flex justify-between items-center">
-                    <h2 className="text-2xl font-bold flex items-center gap-2"><CreditCard /> Finalizar Pagamento</h2>
-                    <button onClick={() => setIsPaymentModalOpen(false)} className="hover:bg-blue-700 p-1 rounded"><X /></button>
+                    <h2 className="text-2xl font-bold flex items-center gap-2"><CreditCard /> Recebimento</h2>
+                    <button onClick={handleClosePaymentModal} className="hover:bg-blue-700 p-1 rounded"><X /></button>
                 </div>
                 
                 <div className="p-6 space-y-6">
-                    <div className="text-center">
-                        <p className="text-gray-500 font-medium">Valor Total a Pagar</p>
-                        <p className="text-4xl font-extrabold text-gray-800">R$ {cartTotal.toFixed(2)}</p>
+                    {/* Totals Summary */}
+                    <div className="grid grid-cols-3 gap-2 text-center bg-gray-50 p-4 rounded-xl border border-gray-100">
+                        <div>
+                            <p className="text-xs text-gray-500 font-bold uppercase">Total</p>
+                            <p className="text-lg font-bold text-gray-800">R$ {cartTotal.toFixed(2)}</p>
+                        </div>
+                        <div>
+                            <p className="text-xs text-gray-500 font-bold uppercase">Já Pago</p>
+                            <p className="text-lg font-bold text-green-600">R$ {totalPaid.toFixed(2)}</p>
+                        </div>
+                        <div>
+                            <p className="text-xs text-gray-500 font-bold uppercase">Restante</p>
+                            <p className="text-lg font-bold text-blue-600">R$ {remainingTotal.toFixed(2)}</p>
+                        </div>
                     </div>
 
                     <div>
-                        <label className="block text-sm font-bold text-gray-700 mb-2">Forma de Pagamento</label>
+                        <label className="block text-sm font-bold text-gray-700 mb-2">Selecione a Forma</label>
                         <div className="grid grid-cols-2 gap-3">
                             {paymentMethods.map(method => (
                                 <button
@@ -640,35 +846,46 @@ const POS: React.FC = () => {
                         </div>
                     </div>
 
-                    {isCashPayment && (
-                         <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-                            <label className="block text-sm font-bold text-gray-700 mb-2">Valor Recebido (Dinheiro)</label>
-                            <div className="relative">
-                                <span className="absolute left-3 top-3 text-gray-500 font-bold">R$</span>
-                                <input 
-                                    type="number" 
-                                    autoFocus
-                                    value={receivedAmount}
-                                    onChange={(e) => setReceivedAmount(e.target.value)}
-                                    className="w-full pl-10 p-3 text-lg font-bold border border-gray-300 rounded focus:ring-2 focus:ring-green-500 outline-none"
-                                />
-                            </div>
+                    {/* Value Input (Editable for ALL methods) */}
+                    <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                        <label className="block text-sm font-bold text-gray-700 mb-2">
+                             Valor a Processar ({selectedMethodObj?.nome || '...'})
+                        </label>
+                        <div className="relative">
+                            <span className="absolute left-3 top-3 text-gray-500 font-bold">R$</span>
+                            <input 
+                                type="number" 
+                                autoFocus
+                                value={paymentInputValue}
+                                onChange={(e) => setPaymentInputValue(e.target.value)}
+                                className="w-full pl-10 p-3 text-lg font-bold border border-gray-300 rounded focus:ring-2 focus:ring-green-500 outline-none"
+                            />
+                        </div>
+                        
+                        {/* Change Preview */}
+                        {isCashPayment && (
                             <div className="mt-3 flex justify-between items-center text-sm">
-                                <span className="font-bold text-gray-500">Troco:</span>
-                                <span className={`font-bold text-xl ${changeValue > 0 ? 'text-green-600' : 'text-gray-400'}`}>
-                                    R$ {changeValue.toFixed(2)}
+                                <span className="font-bold text-gray-500">Troco Estimado:</span>
+                                <span className={`font-bold text-xl ${potentialChange > 0 ? 'text-green-600' : 'text-gray-400'}`}>
+                                    R$ {potentialChange.toFixed(2)}
                                 </span>
                             </div>
-                         </div>
-                    )}
+                        )}
+                        
+                        {!isCashPayment && parseFloat(paymentInputValue) > remainingTotal && (
+                             <div className="mt-2 text-xs text-red-500 font-bold">
+                                Atenção: Valor maior que o restante.
+                             </div>
+                        )}
+                    </div>
                 </div>
 
                 <div className="p-4 bg-gray-50 border-t border-gray-200 flex gap-3">
-                    <button onClick={() => setIsPaymentModalOpen(false)} className="flex-1 py-3 bg-gray-200 text-gray-800 font-bold rounded-lg hover:bg-gray-300">
-                        Voltar
+                    <button onClick={handleClosePaymentModal} className="flex-1 py-3 bg-gray-200 text-gray-800 font-bold rounded-lg hover:bg-gray-300">
+                        Fechar / Cancelar
                     </button>
-                    <button onClick={handleFinalizeOrder} className="flex-1 py-3 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 shadow-lg shadow-green-200">
-                        CONFIRMAR VENDA
+                    <button onClick={handleRegisterPayment} className="flex-1 py-3 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 shadow-lg shadow-green-200">
+                        REGISTRAR PAGAMENTO
                     </button>
                 </div>
             </div>
@@ -678,8 +895,8 @@ const POS: React.FC = () => {
       {/* Header Bar */}
       <div className="bg-white px-4 py-2 rounded-t-lg shadow-sm border-b border-gray-200 flex justify-between items-center h-14">
         <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
-           <span className="text-blue-600">#{Math.floor(Math.random() * 1000)}</span> 
-           Novo Atendimento
+           <span className="text-blue-600">#{editingOrderId || 'Novo'}</span> 
+           {editingOrderId ? 'Editando Atendimento' : 'Novo Atendimento'}
         </h2>
         <div className="flex gap-2">
             <button 
@@ -688,9 +905,7 @@ const POS: React.FC = () => {
             >
                <X size={18} /> Cancelar Atendimento
             </button>
-            <button onClick={handleInitiatePayment} className="px-4 py-1.5 bg-blue-600 text-white text-sm font-bold rounded-lg hover:bg-blue-700 flex items-center gap-2 shadow-sm">
-                <Banknote size={18} /> Finalizar / Pagamento (F5)
-            </button>
+            {renderActionButtons()}
         </div>
       </div>
 
@@ -698,8 +913,7 @@ const POS: React.FC = () => {
         
         {/* Main Form Area */}
         <div className="flex-1 flex flex-col gap-2 overflow-hidden">
-            
-            {/* Header Info Block (Compact) */}
+             {/* ... Form Inputs (Client, Search, etc) ... */}
             <div className="bg-white p-3 rounded-lg shadow-sm border border-gray-200">
                 <div className="grid grid-cols-1 md:grid-cols-12 gap-3 mb-2">
                     <div className="md:col-span-2">
@@ -721,17 +935,18 @@ const POS: React.FC = () => {
                                     setClientSearch(e.target.value);
                                     setSelectedClient(null);
                                 }}
+                                disabled={currentOrderStatus === PedidoStatus.Pago}
                                 className={`w-full border border-gray-300 rounded p-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none ${selectedClient ? 'bg-blue-50 border-blue-400 font-bold text-blue-800' : 'bg-white'}`}
                              />
                              <button 
                                 onClick={() => setIsClientModalOpen(true)}
-                                className="px-3 bg-gray-200 rounded border border-gray-300 text-gray-600 hover:bg-gray-300 active:bg-gray-400 transition-colors"
+                                disabled={currentOrderStatus === PedidoStatus.Pago}
+                                className="px-3 bg-gray-200 rounded border border-gray-300 text-gray-600 hover:bg-gray-300 active:bg-gray-400 transition-colors disabled:opacity-50"
                                 title="Abrir busca avançada (F2)"
                              >
                                 <Search size={16}/>
                              </button>
                         </div>
-                        {/* Client Autocomplete Dropdown */}
                         {clientSearch && !selectedClient && (
                             <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 shadow-lg max-h-40 overflow-auto z-40">
                                 {filteredClients.map(c => (
@@ -754,33 +969,35 @@ const POS: React.FC = () => {
                         type="text" 
                         value={observation}
                         onChange={(e) => setObservation(e.target.value)}
-                        className="w-full border border-gray-300 rounded p-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" 
+                        disabled={currentOrderStatus === PedidoStatus.Pago}
+                        className="w-full border border-gray-300 rounded p-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none disabled:bg-gray-100" 
                         placeholder="Observações do pedido..."
                     />
                 </div>
             </div>
 
-            {/* Product Section (Expanded Grid) */}
+            {/* Product Section */}
             <div className="bg-white rounded-lg shadow-sm flex-1 flex flex-col min-h-0 border border-gray-200 overflow-hidden">
                 <div className="p-2 border-b border-gray-200 bg-gray-50 flex gap-2 items-center relative z-20">
                      <div className="flex-1 flex gap-2">
                         <input 
                             type="text" 
-                            autoFocus
+                            autoFocus={currentOrderStatus !== PedidoStatus.Pago}
+                            disabled={currentOrderStatus === PedidoStatus.Pago}
                             placeholder="Adicionar Produto (Nome ou Código)..." 
                             value={productSearch}
                             onChange={(e) => setProductSearch(e.target.value)}
-                            className="flex-1 border border-gray-300 rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none shadow-sm"
+                            className="flex-1 border border-gray-300 rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none shadow-sm disabled:bg-gray-100"
                         />
                         <button 
                             onClick={() => setIsProductModalOpen(true)}
-                            className="px-4 bg-blue-600 text-white rounded font-bold hover:bg-blue-700 flex items-center gap-2 text-sm"
+                            disabled={currentOrderStatus === PedidoStatus.Pago}
+                            className="px-4 bg-blue-600 text-white rounded font-bold hover:bg-blue-700 flex items-center gap-2 text-sm disabled:opacity-50"
                         >
                             <Search size={16} /> Buscar
                         </button>
                      </div>
                      
-                     {/* Product Dropdown (Inline) */}
                      {productSearch && (
                         <div className="absolute top-full left-2 right-2 bg-white border border-gray-200 shadow-xl max-h-60 overflow-auto z-40 mt-1 rounded-md">
                             {filteredProducts.map(p => (
@@ -831,7 +1048,6 @@ const POS: React.FC = () => {
                                     <td className="p-2 text-sm text-gray-500">{item.produto.codigoInterno}</td>
                                     <td className="p-2 text-sm font-medium text-gray-800">
                                       {item.produto.nome}
-                                      {/* Render Addons */}
                                       {item.adicionais && item.adicionais.length > 0 && (
                                         <div className="mt-1 space-y-0.5">
                                           {item.adicionais.map((addon, idx) => (
@@ -850,21 +1066,24 @@ const POS: React.FC = () => {
                                         <input 
                                             type="number" 
                                             value={item.quantidade} 
+                                            disabled={currentOrderStatus === PedidoStatus.Pago}
                                             onChange={(e) => {
                                                 const val = parseInt(e.target.value);
                                                 if(val > 0) {
                                                     setCart(prev => prev.map((it, i) => i === index ? {...it, quantidade: val} : it));
                                                 }
                                             }}
-                                            className="w-16 border rounded text-center p-1 focus:ring-2 focus:ring-blue-500 outline-none"
+                                            className="w-16 border rounded text-center p-1 focus:ring-2 focus:ring-blue-500 outline-none disabled:bg-gray-100"
                                         />
                                     </td>
                                     <td className="p-2 text-sm text-right text-gray-600">R$ {item.produto.preco.toFixed(2)}</td>
                                     <td className="p-2 text-sm font-bold text-right text-blue-700">R$ {lineTotal.toFixed(2)}</td>
                                     <td className="p-2 text-center">
-                                        <button onClick={() => handleRemoveItem(index)} className="text-red-400 hover:text-red-600 p-1 hover:bg-red-50 rounded">
-                                            <Trash2 size={16} />
-                                        </button>
+                                        {currentOrderStatus !== PedidoStatus.Pago && (
+                                            <button onClick={() => handleRemoveItem(index)} className="text-red-400 hover:text-red-600 p-1 hover:bg-red-50 rounded">
+                                                <Trash2 size={16} />
+                                            </button>
+                                        )}
                                     </td>
                                 </tr>
                                 </React.Fragment>
@@ -908,6 +1127,19 @@ const POS: React.FC = () => {
                      <span className="font-medium text-green-500">R$ 0,00</span>
                  </div>
                  
+                 {/* Payments List (If any exist) */}
+                 {existingPayments.length > 0 && (
+                    <div className="border-t border-gray-100 mt-2 pt-2">
+                        <p className="text-xs font-bold text-gray-500 uppercase mb-2">Pagamentos Efetuados</p>
+                        {existingPayments.map((p, idx) => (
+                            <div key={idx} className="flex justify-between text-xs text-green-700 mb-1">
+                                <span>{p.formaPagamentoNome}</span>
+                                <span>R$ {p.valor.toFixed(2)}</span>
+                            </div>
+                        ))}
+                    </div>
+                 )}
+
                  <div className="flex-1"></div>
 
                  <div className="border-t border-gray-100 mt-2 pt-4">
@@ -915,6 +1147,18 @@ const POS: React.FC = () => {
                          <span>Total</span>
                          <span>R$ {cartTotal.toFixed(2)}</span>
                      </div>
+                     {totalPaid > 0 && (
+                        <div className="flex justify-between text-sm font-medium text-green-600 mt-1">
+                            <span>Pago</span>
+                            <span>- R$ {totalPaid.toFixed(2)}</span>
+                        </div>
+                     )}
+                     {totalPaid > 0 && remainingTotal > 0 && (
+                        <div className="flex justify-between text-lg font-bold text-blue-600 mt-2 pt-2 border-t border-dashed">
+                            <span>Falta</span>
+                            <span>R$ {remainingTotal.toFixed(2)}</span>
+                        </div>
+                     )}
                  </div>
              </div>
         </div>

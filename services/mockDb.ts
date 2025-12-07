@@ -1,4 +1,4 @@
-import { Cliente, Produto, CaixaMovimento, Pedido, TipoOperacaoCaixa, PedidoStatus, GrupoProduto, FormaPagamento, ConfiguracaoAdicional } from '../types';
+import { Cliente, Produto, CaixaMovimento, Pedido, TipoOperacaoCaixa, PedidoStatus, GrupoProduto, FormaPagamento, ConfiguracaoAdicional, Pagamento } from '../types';
 
 export const INITIAL_GROUPS: GrupoProduto[] = [
   { id: 1, nome: 'Lanches' },
@@ -108,16 +108,63 @@ class MockDbContext {
   }
 
   // --- Pedidos ---
-  addPedido(pedido: Pedido) {
-    this.pedidos.push(pedido);
-    if (pedido.status === PedidoStatus.Pago) {
-      this.addMovimento({
-        id: Math.floor(Math.random() * 10000),
-        data: new Date().toISOString(),
-        tipoOperacao: TipoOperacaoCaixa.Vendas,
-        valor: pedido.total,
-        observacao: `Venda #${pedido.id} (${pedido.tipoAtendimento}) - ${pedido.formaPagamentoNome}`
-      });
+  savePedido(pedido: Pedido) {
+    const index = this.pedidos.findIndex(p => p.id === pedido.id);
+    
+    if (index >= 0) {
+      // Update existing
+      const existing = this.pedidos[index];
+      
+      // Safety Check: Calculate total paid from DB to ensure status integrity
+      const totalPaid = existing.pagamentos ? existing.pagamentos.reduce((acc, p) => acc + p.valor, 0) : 0;
+      let finalStatus = pedido.status;
+
+      // If fully paid (allowing for float precision), force status to Pago
+      // This prevents the UI from accidentally reverting a Paid order to Pendente via the Save button
+      if (totalPaid >= (pedido.total - 0.01)) {
+          finalStatus = PedidoStatus.Pago;
+      }
+
+      this.pedidos[index] = { 
+          ...pedido, 
+          pagamentos: existing.pagamentos, // Always preserve DB payments, never trust UI to send full payment history in this mock
+          status: finalStatus
+      };
+    } else {
+      // Insert new
+      this.pedidos.push({ ...pedido, pagamentos: [] });
+    }
+  }
+
+  // NEW: Handle Partial Payments
+  addPagamento(pedidoId: number, pagamento: Pagamento) {
+    const pedido = this.pedidos.find(p => p.id === pedidoId);
+    if (!pedido) throw new Error("Pedido não encontrado");
+
+    // 1. Add Payment to Order
+    if (!pedido.pagamentos) pedido.pagamentos = [];
+    pedido.pagamentos.push(pagamento);
+
+    // 2. Add Cash Movement IMMEDIATELY
+    this.addMovimento({
+      id: Math.floor(Math.random() * 1000000),
+      data: new Date().toISOString(),
+      tipoOperacao: TipoOperacaoCaixa.Vendas,
+      valor: pagamento.valor,
+      observacao: `Recebimento Pedido #${pedido.id} (${pedido.tipoAtendimento}) - ${pagamento.formaPagamentoNome} (Parcial)`
+    });
+
+    // 3. Check Status
+    const totalPago = pedido.pagamentos.reduce((acc, p) => acc + p.valor, 0);
+    // Floating point tolerance
+    if (totalPago >= (pedido.total - 0.01)) {
+       pedido.status = PedidoStatus.Pago;
+    } else {
+       // Only change to Pendente if it was Cancelled? 
+       // Usually we keep it Pendente if it was already Pendente.
+       if(pedido.status !== PedidoStatus.Pago) {
+         pedido.status = PedidoStatus.Pendente;
+       }
     }
   }
 
@@ -125,11 +172,17 @@ class MockDbContext {
     return [...this.pedidos].reverse();
   }
   
+  getPedidoById(id: number) {
+    return this.pedidos.find(p => p.id === id);
+  }
+  
   getVendasDoDia(): number {
       const today = new Date().toDateString();
-      return this.pedidos
-        .filter(p => new Date(p.data).toDateString() === today && p.status !== PedidoStatus.Cancelado)
-        .reduce((acc, p) => acc + p.total, 0);
+      // Sum all payments made today, regardless of order status
+      // This is a more accurate cash flow metric
+      return this.caixa
+        .filter(m => new Date(m.data).toDateString() === today && m.tipoOperacao === TipoOperacaoCaixa.Vendas)
+        .reduce((acc, m) => acc + m.valor, 0);
   }
 
   // --- Produtos ---
